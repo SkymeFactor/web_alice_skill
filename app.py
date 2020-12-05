@@ -15,11 +15,12 @@ app = Flask(__name__)
 # Default session storage for user data
 sessionStorage = {}
 # Read your ID's from file
-with open("credentials.txt") as f:
+credentials_filepath = os.path.abspath(os.path.join(os.path.dirname(__file__), "credentials.txt"))
+with open(credentials_filepath) as f:
     # Skill ID
-    skill_id = f.read()
+    skill_id = f.readline().rstrip(os.linesep)
     # OAuth ID
-    OAuth_id = f.read()
+    OAuth_id = f.readline().rstrip(os.linesep)
 
 
 # Flask app's root pathway setup
