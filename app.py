@@ -96,17 +96,26 @@ def sync_user(token, user_id):
 
 # Separated thread_func to automatically remove used photos
 def photo_autoremove(photo_id):
+    # Set the time limit after which we will remove photo_id from Yandex.dialogs storage
     time.sleep(5)
+    # Construct the url
     url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images/' + photo_id
+    # Set headers
     headers = {'Authorization': 'OAuth ' + OAuth_id}
+    # Send DELETE request
     requests.delete(url, headers=headers)
     return
 
 def download_photo_to_cache(user_id, photo_num):
+    # Request the photo
     r = requests.get(sessionStorage[user_id]['photos'][photo_num], stream=True)
+    # In case if we succeeded
     if r.status_code == 200:
+        # Write response content into the .image_cache folder
         with open(os.path.join(abs_filepath, '.image_cache', user_id + '.jpg'), 'wb') as f:
             f.write(r.content)
+        # Write this info into sessionStorage
+        sessionStorage[user_id].update({'last_requested_photo': photo_num})
     return
 
 # Функция для непосредственной обработки диалога.
@@ -155,7 +164,7 @@ def handle_dialog(req, res):
                 photo_num = max_len
         except:
             photo_num = 0
-        # Post requested image into yandex.dialogs small storage
+        # Post requested image into Yandex.dialogs small storage
         url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
         headers = {'Authorization': 'OAuth ' + OAuth_id, 'Content-Type': 'application/json'}
         data = {'url': sessionStorage[user_id]['photos'][photo_num]}
@@ -164,7 +173,11 @@ def handle_dialog(req, res):
         res['response']['card'] = {
             'type': 'BigImage',
             'image_id': r.json()['image']['id'],
-            'title': "Изображение " + str(photo_num)
+            'title': "Изображение " + str(photo_num),
+            'button': {
+                'text': "Открыть изображение " + str(photo_num),
+                'url': sessionStorage[user_id]['photos'][photo_num]
+            }
         }
         # Cache the image file
         Thread(target=download_photo_to_cache, args=[user_id, photo_num]).start()
@@ -173,7 +186,8 @@ def handle_dialog(req, res):
     # Make Alisa to show us the image that stored within user cache
     elif 'покажи кэш' in req['request']['original_utterance'].lower():
         path = os.path.join(abs_filepath, '.image_cache', user_id + '.jpg')
-        if os.path.isfile(path):
+        if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
+            photo_num = sessionStorage[user_id]['last_requested_photo']
             res['response']['text'] = "Вывожу на экран"
             url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
             code = abs_filepath + '/curl_post_multipart.sh ' + OAuth_id + ' ' + path + ' "' + url + '"'
@@ -182,7 +196,11 @@ def handle_dialog(req, res):
             res['response']['card'] = {
                 'type': 'BigImage',
                 'image_id': r['image']['id'],
-                'title': "Изображение из кэша"
+                'title': "Изображение " + str(photo_num),
+                'button': {
+                    'text': "Открыть изображение " + str(photo_num),
+                    'url': sessionStorage[user_id]['photos'][photo_num]
+                }
             }
             Thread(target=photo_autoremove, args=[r['image']['id']]).start()
         else:
