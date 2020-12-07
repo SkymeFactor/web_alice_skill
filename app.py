@@ -2,10 +2,13 @@ from __future__ import unicode_literals
 import json
 import os
 import time
-# Install the important package which azure doesn't have
-os.system('pip install requests')
+# Get the absolute filepath to working directory
+abs_filepath = os.path.abspath(os.path.dirname(__file__))
+# Install the important packages
+os.system('pip install -r' + os.path.join(abs_filepath, 'requirements.txt') )
 
 import requests
+from PIL import Image
 from threading import Thread
 from flask import Flask, request
 
@@ -15,7 +18,7 @@ app = Flask(__name__)
 # Default session storage for user data
 sessionStorage = {}
 # Read your ID's from file
-credentials_filepath = os.path.abspath(os.path.join(os.path.dirname(__file__), "credentials.txt"))
+credentials_filepath = os.path.join(abs_filepath, "credentials.txt")
 with open(credentials_filepath) as f:
     # Skill ID
     skill_id = f.readline().rstrip(os.linesep)
@@ -88,7 +91,7 @@ def sync_user(token, user_id):
         except:
             pass
     # Update session storage
-    sessionStorage[user_id].update({'user_info': user})
+    sessionStorage.update({str(user_id): user})
 
 
 # Separated thread_func to automatically remove used photos
@@ -99,6 +102,12 @@ def photo_autoremove(photo_id):
     requests.delete(url, headers=headers)
     return
 
+def download_photo_to_cache(user_id, photo_num):
+    r = requests.get(sessionStorage[user_id]['photos'][photo_num], stream=True)
+    if r.status_code == 200:
+        with open(os.path.join(abs_filepath, '.image_cache', user_id + '.jpg'), 'wb') as f:
+            f.write(r.content)
+    return
 
 # Функция для непосредственной обработки диалога.
 def handle_dialog(req, res):
@@ -116,8 +125,8 @@ def handle_dialog(req, res):
             ]
         })
         try:
-            res['response']['text'] = 'Привет, ' + sessionStorage[user_id]['user_info']['first_name'] \
-                + ' ' + sessionStorage[user_id]['user_info']['last_name'] + ', купи слона!'
+            res['response']['text'] = 'Приветствую, ' + sessionStorage[user_id]['first_name'] \
+                + ' ' + sessionStorage[user_id]['last_name'] + ', рада вас видеть!'
         except:
             res['response']['text'] = 'Привет! Купи слона!'
         res['response']['buttons'] = get_suggests(user_id)
@@ -141,7 +150,7 @@ def handle_dialog(req, res):
         # Extract the photo number from phrase if any
         try:
             photo_num = int(req['request']['nlu']['tokens'][-1])
-            max_len = len(sessionStorage[user_id]['user_info']['photos'])
+            max_len = len(sessionStorage[user_id]['photos'])
             if photo_num > max_len:
                 photo_num = max_len
         except:
@@ -149,7 +158,7 @@ def handle_dialog(req, res):
         # Post requested image into yandex.dialogs small storage
         url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
         headers = {'Authorization': 'OAuth ' + OAuth_id, 'Content-Type': 'application/json'}
-        data = {'url': sessionStorage[user_id]['user_info']['photos'][photo_num]}
+        data = {'url': sessionStorage[user_id]['photos'][photo_num]}
         r = requests.post(url, headers=headers, json=data)
         # Display the image card
         res['response']['card'] = {
@@ -157,8 +166,27 @@ def handle_dialog(req, res):
             'image_id': r.json()['image']['id'],
             'title': "Изображение " + str(photo_num)
         }
+        # Cache the image file
+        Thread(target=download_photo_to_cache, args=[user_id, photo_num]).start()
         # Schedule the used image removal from yandex.dialogs small storage
         Thread(target=photo_autoremove, args=[r.json()['image']['id']]).start()
+    # Make Alisa to show us the image that stored within user cache
+    elif 'покажи кэш' in req['request']['original_utterance'].lower():
+        path = os.path.join(abs_filepath, '.image_cache', user_id + '.jpg')
+        if os.path.isfile(path):
+            res['response']['text'] = "Вывожу на экран"
+            url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
+            code = abs_filepath + '/curl_post_multipart.sh ' + OAuth_id + ' ' + path + ' "' + url + '"'
+            out = os.popen(code)
+            r = json.loads(out.read())
+            res['response']['card'] = {
+                'type': 'BigImage',
+                'image_id': r['image']['id'],
+                'title': "Изображение из кэша"
+            }
+            Thread(target=photo_autoremove, args=[r['image']['id']]).start()
+        else:
+            res['response']['text'] = 'В кэше нет изображения'
     else:
         # In other cases the standard behaviour
         res['response']['text'] = 'Все говорят "%s", а ты купи слона!' % (req['request']['original_utterance'])
