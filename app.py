@@ -8,9 +8,9 @@ abs_filepath = os.path.abspath(os.path.dirname(__file__))
 os.system('pip install -r' + os.path.join(abs_filepath, 'requirements.txt') )
 
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 from threading import Thread
-from flask import Flask, request
+from flask import Flask, request, send_file
 
 # Run the main app
 app = Flask(__name__)
@@ -57,6 +57,15 @@ def main():
         ensure_ascii=False,
         indent=2
     )
+
+# Function to show users full-scale photos directly from cache
+@app.route("/image=<img>", methods=['GET'])
+def show_image(img):
+    path = os.path.join(abs_filepath, '.image_cache', img + '.jpg')
+    if os.path.isfile(path):
+        return send_file(path, mimetype='image/jpg', cache_timeout=-1)
+    else:
+        return
 
 
 # Tell Alisa that we need to authenticate at VK.api
@@ -106,19 +115,70 @@ def photo_autoremove(photo_id):
     requests.delete(url, headers=headers)
     return
 
+
+# Separated thread_func to download shown image to cache
 def download_photo_to_cache(user_id, photo_num):
     # Request the photo
     r = requests.get(sessionStorage[user_id]['photos'][photo_num], stream=True)
     # In case if we succeeded
     if r.status_code == 200:
-        # Write response content into the .image_cache folder
+        # Write response content into the ./.image_cache/ folder
         with open(os.path.join(abs_filepath, '.image_cache', user_id + '.jpg'), 'wb') as f:
             f.write(r.content)
         # Write this info into sessionStorage
         sessionStorage[user_id].update({'last_requested_photo': photo_num})
     return
 
-# Функция для непосредственной обработки диалога.
+
+# Function for uploading photos from cache to the album "VK_Gallery"
+def upload_photo_to_server(user_id, path, token):
+    album_id = ''
+    # Request VK albums of the user
+    albums = requests.get("https://api.vk.com/method/photos.getAlbums?access_token=" + token + "&v=5.126").json()['response']['items']
+    # Go through them and get the one called "VK_Gallery"
+    for item in albums:
+        if item['title'] == 'VK_Gallery':
+            album_id = str(item['id'])
+    # If the user doesn't have "VK_Gallery" album, create it
+    if album_id == '':
+        album_id = str(requests.get("https://api.vk.com/method/photos.createAlbum?access_token=" + token \
+            + "&title=VK_Gallery" + "&v=5.126").json()['response']['id'])
+    # Now get the uploading url
+    upload_url = requests.get('https://api.vk.com/method/photos.getUploadServer?access_token=' + token \
+        + '&album_id=' + album_id + '&v=5.126').json()['response']['upload_url']
+    # Upload using "curl_post_multipart.sh" script
+    code = abs_filepath + '/curl_post_multipart.sh "" ' + path + ' "' + upload_url + '"'
+    out = os.popen(code)
+    # Parse the answer
+    r = json.loads(out.read())
+    # Save uploaded photo to album
+    requests.get('https://api.vk.com/method/photos.save?access_token=' + token + '&album_id=' \
+            + str(r['aid']) + '&server=' + str(r['server']) + '&photos_list=' + r['photos_list'] + '&hash=' + str(r['hash']) + '&v=5.126')
+    return "Сохранила"
+
+
+# Function for uploading photos to Yandex.Dialogs
+def upload_photo_to_yandex_dialogs(user_id, path, res):
+    photo_num = sessionStorage[user_id]['last_requested_photo']
+    res['response']['text'] = "Вывожу на экран"
+    url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
+    code = abs_filepath + '/curl_post_multipart.sh ' + OAuth_id + ' ' + path + ' "' + url + '"'
+    out = os.popen(code)
+    r = json.loads(out.read())
+    res['response']['card'] = {
+        'type': 'BigImage',
+        'image_id': r['image']['id'],
+        'title': "Изображение " + str(photo_num),
+        'button': {
+            'text': "Открыть изображение " + str(photo_num),
+            'url': 'https://aliceresponse.azurewebsites.net/image=' + str(user_id) #sessionStorage[user_id]['photos'][photo_num]
+        }
+    }
+    Thread(target=photo_autoremove, args=[r['image']['id']]).start()
+    return res
+
+
+# Dialog handling function (here all the linguistic checks are made)
 def handle_dialog(req, res):
     user_id = req['session']['user']['user_id']
 
@@ -133,11 +193,11 @@ def handle_dialog(req, res):
                 "Отстань!",
             ]
         })
-        try:
+        if 'first_name' in sessionStorage[user_id] and 'last_name' in sessionStorage[user_id]:
             res['response']['text'] = 'Приветствую, ' + sessionStorage[user_id]['first_name'] \
                 + ' ' + sessionStorage[user_id]['last_name'] + ', рада вас видеть!'
-        except:
-            res['response']['text'] = 'Привет! Купи слона!'
+        else:
+            res['response']['text'] = 'Извините, что-то пошло не так с авторизацией'
         res['response']['buttons'] = get_suggests(user_id)
         return
 
@@ -152,8 +212,13 @@ def handle_dialog(req, res):
         res['response']['text'] = 'Слона можно найти на Яндекс.Маркете!'
         return
 
+    # Get the original utterance into a variable
+    original_utterance = req['request']['original_utterance'].lower()
+    # Image cache path
+    path = os.path.join(abs_filepath, '.image_cache', user_id + '.jpg')
+
     # Check if the user has requested some photo
-    if 'покажи фото' in req['request']['original_utterance'].lower():
+    if 'покажи фото' in original_utterance:
         # Make Alisa tell the following phrase
         res['response']['text'] = "Вывожу на экран"
         # Extract the photo number from phrase if any
@@ -184,30 +249,41 @@ def handle_dialog(req, res):
         # Schedule the used image removal from yandex.dialogs small storage
         Thread(target=photo_autoremove, args=[r.json()['image']['id']]).start()
     # Make Alisa to show us the image that stored within user cache
-    elif 'покажи кэш' in req['request']['original_utterance'].lower():
-        path = os.path.join(abs_filepath, '.image_cache', user_id + '.jpg')
+    elif 'фильтр' in original_utterance:
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
-            photo_num = sessionStorage[user_id]['last_requested_photo']
-            res['response']['text'] = "Вывожу на экран"
-            url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
-            code = abs_filepath + '/curl_post_multipart.sh ' + OAuth_id + ' ' + path + ' "' + url + '"'
-            out = os.popen(code)
-            r = json.loads(out.read())
-            res['response']['card'] = {
-                'type': 'BigImage',
-                'image_id': r['image']['id'],
-                'title': "Изображение " + str(photo_num),
-                'button': {
-                    'text': "Открыть изображение " + str(photo_num),
-                    'url': sessionStorage[user_id]['photos'][photo_num]
-                }
-            }
-            Thread(target=photo_autoremove, args=[r['image']['id']]).start()
+            # Apply filter if it's requested
+            img = Image.open(path)
+            if 'чёрно-белый' in original_utterance:
+                img = ImageOps.grayscale(img)
+            elif 'пастеризация' in original_utterance:
+                img = ImageOps.posterize(img, 3)
+            elif 'отражение' in original_utterance or 'отражающий' in original_utterance:
+                img = ImageOps.mirror(img)
+            img.save(path)
+            # Show it to user
+            upload_photo_to_yandex_dialogs(user_id, path, res)
+        else:
+            res['response']['text'] = 'Пожалуйста, сначала выберите изображение'
+    elif 'покажи кэш' in original_utterance:
+        if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
+            res = upload_photo_to_yandex_dialogs(user_id, path, res)
         else:
             res['response']['text'] = 'В кэше нет изображения'
+    elif 'отмени' in original_utterance:
+        # Get previously requestet photo's number
+        photo_num = sessionStorage[user_id]['last_requested_photo']
+        # Re-download it to cache to clear the changes
+        Thread(target=download_photo_to_cache, args=[user_id, photo_num]).start()
+        res['response']['text'] = 'Поняла'
+    elif 'сохрани' in original_utterance:
+        # Upload photo to VK_Gallery album of the user
+        if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
+            res['response']['text'] = upload_photo_to_server(user_id, path, req['session']['user']['access_token'])
+        else:
+            res['response']['text'] = "Пока что мне нечего сохранить"
     else:
         # In other cases the standard behaviour
-        res['response']['text'] = 'Все говорят "%s", а ты купи слона!' % (req['request']['original_utterance'])
+        res['response']['text'] = 'К сожалению, я не знаю команды "%s"' % (req['request']['original_utterance'])
     # Pick up suggestions
     res['response']['buttons'] = get_suggests(user_id)
 
