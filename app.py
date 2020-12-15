@@ -193,11 +193,11 @@ def upload_photo_to_yandex_dialogs(user_id, res, photo_num, path=None):
 
 # Dialog handling function (here all the linguistic checks are made)
 def handle_dialog(req, res):
+    # Get a unique user ID of user's account
     user_id = req['session']['user']['user_id']
 
+    # Initialize a new session for the new user
     if req['session']['new']:
-        # Это новый пользователь.
-        # Инициализируем сессию и поприветствуем его.
         '''
         sessionStorage[user_id].update({
             'suggests': [
@@ -212,23 +212,9 @@ def handle_dialog(req, res):
                 + ' ' + sessionStorage[user_id]['last_name'] + ', рада вас видеть!'
         else:
             res['response']['text'] = 'Извините, что-то пошло не так с авторизацией'
-        #res['response']['buttons'] = get_suggests(user_id)
         return
 
-    '''
-    # Обрабатываем ответ пользователя.
-    if req['request']['original_utterance'].lower() in [
-        'ладно',
-        'куплю',
-        'покупаю',
-        'хорошо',
-    ]:
-        # Пользователь согласился, прощаемся.
-        res['response']['text'] = 'Слона можно найти на Яндекс.Маркете!'
-        return
-    '''
-
-    # Get the original utterance into a variable
+    # Put the original utterance into a variable
     original_utterance = req['request']['original_utterance'].lower()
     # Image cache path
     path = os.path.join(abs_filepath, '.image_cache', user_id + '.jpg')
@@ -246,6 +232,7 @@ def handle_dialog(req, res):
             photo_num = 0
         # Upload the result
         res = upload_photo_to_yandex_dialogs(user_id, res, photo_num)
+    
     # Swipe photo forward
     elif 'следующее' in original_utterance:
         if 'last_requested_photo' in sessionStorage[user_id]:
@@ -255,6 +242,7 @@ def handle_dialog(req, res):
             res = upload_photo_to_yandex_dialogs(user_id, res, photo_num)
         else:
             res['response']['text'] = 'Пожалуйста, сначала выберите изображение'
+    
     # Swipe photo backward
     elif 'предыдущее' in original_utterance:
         if 'last_requested_photo' in sessionStorage[user_id]:
@@ -264,6 +252,7 @@ def handle_dialog(req, res):
             res = upload_photo_to_yandex_dialogs(user_id, res, photo_num)
         else:
             res['response']['text'] = 'Пожалуйста, сначала выберите изображение'
+    
     # Apply some filter chosen by the user
     elif 'фильтр' in original_utterance:
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
@@ -280,6 +269,7 @@ def handle_dialog(req, res):
             upload_photo_to_yandex_dialogs(user_id, res, sessionStorage[user_id]['last_requested_photo'], path)
         else:
             res['response']['text'] = 'Пожалуйста, сначала выберите изображение'
+    
     # Developer's only case to show cached image
     elif 'покажи кэш' in original_utterance:
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
@@ -287,6 +277,7 @@ def handle_dialog(req, res):
             res = upload_photo_to_yandex_dialogs(user_id, res, sessionStorage[user_id]['last_requested_photo'], path)
         else:
             res['response']['text'] = 'В кэше нет изображения'
+    
     # Cancel all changes made
     elif 'отмени' in original_utterance:
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
@@ -297,6 +288,7 @@ def handle_dialog(req, res):
             res['response']['text'] = 'Поняла'
         else:
             res['response']['text'] = 'Пока что мне нечего отменить'
+    
     # Save photo to VK album
     elif 'сохрани' in original_utterance:
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
@@ -304,9 +296,11 @@ def handle_dialog(req, res):
             res['response']['text'] = upload_photo_to_server(user_id, path, req['session']['user']['access_token'])
         else:
             res['response']['text'] = "Пока что мне нечего сохранить"
+    
     # In other cases the standard behaviour
     else:
         res['response']['text'] = 'К сожалению, я не знаю команды "%s"' % (req['request']['original_utterance'])
+    
     # Pick up suggestions
     #res['response']['buttons'] = get_suggests(user_id)
 
