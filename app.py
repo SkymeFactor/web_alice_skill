@@ -58,7 +58,7 @@ def main():
         indent=2
     )
 
-# Function to show users full-scale photos directly from cache
+# Function to show the users full-scale photos directly from cache
 @app.route("/image=<img>", methods=['GET'])
 def show_image(img):
     path = os.path.join(abs_filepath, '.image_cache', img + '.jpg')
@@ -158,22 +158,35 @@ def upload_photo_to_server(user_id, path, token):
 
 
 # Function for uploading photos to Yandex.Dialogs
-def upload_photo_to_yandex_dialogs(user_id, path, res):
-    photo_num = sessionStorage[user_id]['last_requested_photo']
+def upload_photo_to_yandex_dialogs(user_id, res, photo_num, path=None):
     res['response']['text'] = "Вывожу на экран"
     url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
-    code = abs_filepath + '/curl_post_multipart.sh ' + OAuth_id + ' ' + path + ' "' + url + '"'
-    out = os.popen(code)
-    r = json.loads(out.read())
+    return_url = ''
+    # Check if we have to upload image by path or by address
+    if path == None:
+        headers = {'Authorization': 'OAuth ' + OAuth_id, 'Content-Type': 'application/json'}
+        data = {'url': sessionStorage[user_id]['photos'][photo_num]}
+        r = requests.post(url, headers=headers, json=data).json()
+        return_url = sessionStorage[user_id]['photos'][photo_num]
+        # Cache the image file
+        Thread(target=download_photo_to_cache, args=[user_id, photo_num]).start()
+    else:
+        #photo_num = sessionStorage[user_id]['last_requested_photo']
+        code = abs_filepath + '/curl_post_multipart.sh ' + OAuth_id + ' ' + path + ' "' + url + '"'
+        out = os.popen(code)
+        r = json.loads(out.read())
+        return_url = 'https://aliceresponse.azurewebsites.net/image=' + str(user_id)
+    # Form the response
     res['response']['card'] = {
         'type': 'BigImage',
         'image_id': r['image']['id'],
         'title': "Изображение " + str(photo_num),
         'button': {
             'text': "Открыть изображение " + str(photo_num),
-            'url': 'https://aliceresponse.azurewebsites.net/image=' + str(user_id) #sessionStorage[user_id]['photos'][photo_num]
+            'url': return_url
         }
     }
+    # Schedule the used image removal from Yandex.Dialogs small storage
     Thread(target=photo_autoremove, args=[r['image']['id']]).start()
     return res
 
@@ -185,7 +198,7 @@ def handle_dialog(req, res):
     if req['session']['new']:
         # Это новый пользователь.
         # Инициализируем сессию и поприветствуем его.
-
+        '''
         sessionStorage[user_id].update({
             'suggests': [
                 "Не хочу.",
@@ -193,14 +206,16 @@ def handle_dialog(req, res):
                 "Отстань!",
             ]
         })
+        '''
         if 'first_name' in sessionStorage[user_id] and 'last_name' in sessionStorage[user_id]:
             res['response']['text'] = 'Приветствую, ' + sessionStorage[user_id]['first_name'] \
                 + ' ' + sessionStorage[user_id]['last_name'] + ', рада вас видеть!'
         else:
             res['response']['text'] = 'Извините, что-то пошло не так с авторизацией'
-        res['response']['buttons'] = get_suggests(user_id)
+        #res['response']['buttons'] = get_suggests(user_id)
         return
 
+    '''
     # Обрабатываем ответ пользователя.
     if req['request']['original_utterance'].lower() in [
         'ладно',
@@ -211,6 +226,7 @@ def handle_dialog(req, res):
         # Пользователь согласился, прощаемся.
         res['response']['text'] = 'Слона можно найти на Яндекс.Маркете!'
         return
+    '''
 
     # Get the original utterance into a variable
     original_utterance = req['request']['original_utterance'].lower()
@@ -219,36 +235,36 @@ def handle_dialog(req, res):
 
     # Check if the user has requested some photo
     if 'покажи фото' in original_utterance:
-        # Make Alisa tell the following phrase
-        res['response']['text'] = "Вывожу на экран"
-        # Extract the photo number from phrase if any
-        try:
-            photo_num = int(req['request']['nlu']['tokens'][-1])
-            max_len = len(sessionStorage[user_id]['photos'])
-            if photo_num > max_len:
-                photo_num = max_len
-        except:
+        # Trying to get photo number, zero if none is given
+        photo_num = int(next((i['value'] for i in req['request']['nlu']['entities'] if i['type'] == 'YANDEX.NUMBER'), 0 ))
+        # Max length of the photos array
+        max_len = len(sessionStorage[user_id]['photos']) - 1
+        # Boundaries check
+        if photo_num > max_len:
+            photo_num = max_len
+        elif photo_num < 0:
             photo_num = 0
-        # Post requested image into Yandex.dialogs small storage
-        url = 'https://dialogs.yandex.net/api/v1/skills/' + skill_id + '/images'
-        headers = {'Authorization': 'OAuth ' + OAuth_id, 'Content-Type': 'application/json'}
-        data = {'url': sessionStorage[user_id]['photos'][photo_num]}
-        r = requests.post(url, headers=headers, json=data)
-        # Display the image card
-        res['response']['card'] = {
-            'type': 'BigImage',
-            'image_id': r.json()['image']['id'],
-            'title': "Изображение " + str(photo_num),
-            'button': {
-                'text': "Открыть изображение " + str(photo_num),
-                'url': sessionStorage[user_id]['photos'][photo_num]
-            }
-        }
-        # Cache the image file
-        Thread(target=download_photo_to_cache, args=[user_id, photo_num]).start()
-        # Schedule the used image removal from yandex.dialogs small storage
-        Thread(target=photo_autoremove, args=[r.json()['image']['id']]).start()
-    # Make Alisa to show us the image that stored within user cache
+        # Upload the result
+        res = upload_photo_to_yandex_dialogs(user_id, res, photo_num)
+    # Swipe photo forward
+    elif 'следующее' in original_utterance:
+        if 'last_requested_photo' in sessionStorage[user_id]:
+            photo_num = int(sessionStorage[user_id]['last_requested_photo']) + 1
+            if photo_num > len(sessionStorage[user_id]['photos']) - 1:
+                photo_num = 0
+            res = upload_photo_to_yandex_dialogs(user_id, res, photo_num)
+        else:
+            res['response']['text'] = 'Пожалуйста, сначала выберите изображение'
+    # Swipe photo backward
+    elif 'предыдущее' in original_utterance:
+        if 'last_requested_photo' in sessionStorage[user_id]:
+            photo_num = int(sessionStorage[user_id]['last_requested_photo']) - 1
+            if photo_num < 0:
+                photo_num = len(sessionStorage[user_id]['photos']) - 1
+            res = upload_photo_to_yandex_dialogs(user_id, res, photo_num)
+        else:
+            res['response']['text'] = 'Пожалуйста, сначала выберите изображение'
+    # Apply some filter chosen by the user
     elif 'фильтр' in original_utterance:
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
             # Apply filter if it's requested
@@ -261,33 +277,40 @@ def handle_dialog(req, res):
                 img = ImageOps.mirror(img)
             img.save(path)
             # Show it to user
-            upload_photo_to_yandex_dialogs(user_id, path, res)
+            upload_photo_to_yandex_dialogs(user_id, res, sessionStorage[user_id]['last_requested_photo'], path)
         else:
             res['response']['text'] = 'Пожалуйста, сначала выберите изображение'
+    # Developer's only case to show cached image
     elif 'покажи кэш' in original_utterance:
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
-            res = upload_photo_to_yandex_dialogs(user_id, path, res)
+            # Upload photo to Yandex.Dialogs small storage
+            res = upload_photo_to_yandex_dialogs(user_id, res, sessionStorage[user_id]['last_requested_photo'], path)
         else:
             res['response']['text'] = 'В кэше нет изображения'
+    # Cancel all changes made
     elif 'отмени' in original_utterance:
-        # Get previously requestet photo's number
-        photo_num = sessionStorage[user_id]['last_requested_photo']
-        # Re-download it to cache to clear the changes
-        Thread(target=download_photo_to_cache, args=[user_id, photo_num]).start()
-        res['response']['text'] = 'Поняла'
-    elif 'сохрани' in original_utterance:
-        # Upload photo to VK_Gallery album of the user
         if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
+            # Get previously requestet photo's number
+            photo_num = sessionStorage[user_id]['last_requested_photo']
+            # Re-download it to cache to clear the changes
+            Thread(target=download_photo_to_cache, args=[user_id, photo_num]).start()
+            res['response']['text'] = 'Поняла'
+        else:
+            res['response']['text'] = 'Пока что мне нечего отменить'
+    # Save photo to VK album
+    elif 'сохрани' in original_utterance:
+        if os.path.isfile(path) and 'last_requested_photo' in sessionStorage[user_id]:
+            # Upload photo to VK_Gallery album of the user
             res['response']['text'] = upload_photo_to_server(user_id, path, req['session']['user']['access_token'])
         else:
             res['response']['text'] = "Пока что мне нечего сохранить"
+    # In other cases the standard behaviour
     else:
-        # In other cases the standard behaviour
         res['response']['text'] = 'К сожалению, я не знаю команды "%s"' % (req['request']['original_utterance'])
     # Pick up suggestions
-    res['response']['buttons'] = get_suggests(user_id)
+    #res['response']['buttons'] = get_suggests(user_id)
 
-
+'''
 # Функция возвращает две подсказки для ответа.
 def get_suggests(user_id):
     session = sessionStorage[user_id]
@@ -312,3 +335,4 @@ def get_suggests(user_id):
         })
 
     return suggests
+'''
