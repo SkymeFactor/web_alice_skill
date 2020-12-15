@@ -198,20 +198,20 @@ def handle_dialog(req, res):
 
     # Initialize a new session for the new user
     if req['session']['new']:
-        '''
+        
         sessionStorage[user_id].update({
             'suggests': [
-                "Не хочу.",
-                "Не буду.",
-                "Отстань!",
+                "Расскажи о себе",
+                "Что ты умеешь.",
             ]
         })
-        '''
+        
         if 'first_name' in sessionStorage[user_id] and 'last_name' in sessionStorage[user_id]:
             res['response']['text'] = 'Приветствую, ' + sessionStorage[user_id]['first_name'] \
                 + ' ' + sessionStorage[user_id]['last_name'] + ', рада вас видеть!'
         else:
             res['response']['text'] = 'Извините, что-то пошло не так с авторизацией'
+        res['response']['buttons'] = get_suggests(user_id)
         return
 
     # Put the original utterance into a variable
@@ -220,7 +220,20 @@ def handle_dialog(req, res):
     path = os.path.join(abs_filepath, '.image_cache', user_id + '.jpg')
 
     # Check if the user has requested some photo
-    if 'покажи фото' in original_utterance:
+    if 'расскажи о себе' in original_utterance:
+        res['response']['text'] = 'Я представляю все ваши фотографии из социальной сети ВКонтакте как один большой фотоальбом и могу показывать их вам, если попросите.\
+            \r\nА ещё я могу накладывать на них фильтры и сохранять в альбом на вашей страничке.\r\nСпросите: "Что ты умеешь?". - и я расскажу вам подробнее.'
+    elif 'что ты умеешь' in original_utterance:
+        res['response']['text'] = 'Вам доступны следующие команды:\r\n\
+        1. покажи фото. - показываю первую фотографию в вашем альбоме.\r\n\
+        2. покажи фото "номер". - показываю фотографию с номером, который вы мне назовёте.\r\n\
+        3. следующее фото. - перехожу к следующей фотографии.\r\n\
+        4. предыдущее фото. - перехожу к предыдущей фотографии.\r\n\
+        5. наложи фильтр "фильтр". - накладываю фильтр на ту фотографию, которую я показывала последней. Пока что доступны фильтры: "чёрно-белый", "пастеризация" и "отражение".\r\n\
+        6. отменить. - отменю все наложенные фильтры.\r\n\
+        7. сохранить. - сохраню фотографию в альбом VK_Gallery на вашей странице, а если его нет, то создам.\r\n\
+        На фотографию, которую я вам показываю, можно нажать, чтобы открыть её в вашем браузере.'
+    elif 'покажи фото' in original_utterance:
         # Trying to get photo number, zero if none is given
         photo_num = int(next((i['value'] for i in req['request']['nlu']['entities'] if i['type'] == 'YANDEX.NUMBER'), 0 ))
         # Max length of the photos array
@@ -302,9 +315,9 @@ def handle_dialog(req, res):
         res['response']['text'] = 'К сожалению, я не знаю команды "%s"' % (req['request']['original_utterance'])
     
     # Pick up suggestions
-    #res['response']['buttons'] = get_suggests(user_id)
+    res['response']['buttons'] = get_suggests(user_id)
 
-'''
+
 # Функция возвращает две подсказки для ответа.
 def get_suggests(user_id):
     session = sessionStorage[user_id]
@@ -316,17 +329,18 @@ def get_suggests(user_id):
     ]
 
     # Убираем первую подсказку, чтобы подсказки менялись каждый раз.
-    session['suggests'] = session['suggests'][1:]
-    sessionStorage[user_id] = session
+    #session['suggests'] = session['suggests'][1:]
+    #sessionStorage[user_id] = session
 
     # Если осталась только одна подсказка, предлагаем подсказку
     # со ссылкой на Яндекс.Маркет.
+    '''
     if len(suggests) < 2:
         suggests.append({
             "title": "Ладно",
             "url": "https://market.yandex.ru/search?text=слон",
             "hide": True
         })
+    '''
 
     return suggests
-'''
